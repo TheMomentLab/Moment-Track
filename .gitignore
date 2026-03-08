@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# SQLite
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# MT Track data
+.mt_track/
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.tsbuildinfo
+frontend/src/components/ui/
+
+# AI Models
+*.pt
+*.pth
+*.onnx
+*.engine
+
+# Logs
+*.log
+
+# Coverage / Testing
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+
+# Claude Code
+.claude/
+
+# Screenshots (dev only)
+screenshots/
