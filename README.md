@@ -65,19 +65,27 @@ mt_track/
 
 ## Tech Stack
 
+![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688?logo=fastapi&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-003B57?logo=sqlite&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)
+![Vite](https://img.shields.io/badge/Vite-7-646CFF?logo=vite&logoColor=white)
+![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?logo=tailwindcss&logoColor=white)
+
 | Layer | Stack |
 |---|---|
-| **Backend** | Python 3.10+ / FastAPI / SQLAlchemy / SQLite |
+| **Backend** | Python / FastAPI / SQLAlchemy / SQLite |
 | **Frontend** | React / TypeScript / Vite / Tailwind CSS / shadcn/ui |
 | **AI Worker** | YOLO (detection) / ByteTrack (tracking) / ReID embeddings |
 | **Communication** | REST API + Server-Sent Events (SSE) |
 
 ## Requirements
 
-- Python 3.10+
-- Node.js 18+
-- CUDA 11.8+ (optional, for GPU inference)
+![Python](https://img.shields.io/badge/Python-≥3.10-3776AB?logo=python&logoColor=white)
+![Node.js](https://img.shields.io/badge/Node.js-≥18-5FA04E?logo=nodedotjs&logoColor=white)
+![CUDA](https://img.shields.io/badge/CUDA-≥11.8_(optional)-76B900?logo=nvidia&logoColor=white)
 
 ## License
 
-MIT
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow?logo=opensourceinitiative&logoColor=white)
