@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import { useNavigate, useParams, useSearchParams } from "react-router-dom"
-import { api } from "@/api/client"
+import { api, getAllPaginated } from "@/api/client"
 import { useVideoStore } from "@/stores/videoStore"
 import { toast } from "sonner"
 import { useAnnotationStore } from "@/stores/annotationStore"
@@ -13,6 +13,11 @@ import Logo from "@/components/Logo"
 import type { Detection, VideoMeta, Tool, Track, Identity } from "@/types"
 import InferencePanel from "@/components/InferencePanel"
 import ExportDialog from "@/components/ExportDialog"
+import {
+  Zap, LayoutGrid, Download, Square, MousePointer2,
+  SkipBack, SkipForward, ChevronLeft, ChevronRight,
+  Play, Pause, Star, Trash2, Keyboard, Target, ClipboardList,
+} from "lucide-react"
 
 export default function VideoAnnotator() {
   const navigate = useNavigate()
@@ -46,9 +51,21 @@ export default function VideoAnnotator() {
   const [interpFrameEnd, setInterpFrameEnd] = useState("")
   const [interpRunning, setInterpRunning] = useState(false)
 
-  // Timeline 용 tracks/identities
+  // Timeline 용 tracks/identities/coverage
   const [tracks, setTracks] = useState<Track[]>([])
   const [identities, setIdentities] = useState<Identity[]>([])
+  const [trackCoverage, setTrackCoverage] = useState<Array<{ track_id: number; segments: [number, number][] }>>([])
+
+  const [showShortcuts, setShowShortcuts] = useState(false)
+
+  const [showOnboarding, setShowOnboarding] = useState(() => {
+    try { return localStorage.getItem("mt_onboarding_dismissed") !== "1" } catch { return true }
+  })
+  const [onboardingStep, setOnboardingStep] = useState(0)
+  const dismissOnboarding = () => {
+    setShowOnboarding(false)
+    try { localStorage.setItem("mt_onboarding_dismissed", "1") } catch {}
+  }
 
   // ========== Refs (스테일 클로저 방지) ==========
   const currentFrameRef = useRef(currentFrame)
@@ -94,11 +111,10 @@ export default function VideoAnnotator() {
 
   // 현재 프레임 Detection 로드
   const loadDetections = useCallback(() => {
-    api
-      .get<{ items: Detection[] }>(
-        `/videos/${vid}/detections?frame_start=${currentFrameRef.current}&frame_end=${currentFrameRef.current}&limit=200`,
-      )
-      .then((r) => setDetections(r.items))
+    getAllPaginated<Detection>(
+      `/videos/${vid}/detections?frame_start=${currentFrameRef.current}&frame_end=${currentFrameRef.current}`,
+    )
+      .then((items) => setDetections(items))
       .catch(() => setDetections([]))
   }, [vid])
 
@@ -109,19 +125,34 @@ export default function VideoAnnotator() {
 
   // Timeline 용 tracks/identities 로드
   const loadTracksAndIdentities = useCallback(() => {
+    Promise.all([
+      getAllPaginated<Track>(`/projects/${pid}/tracks?video_id=${vid}`),
+      getAllPaginated<Identity>(`/projects/${pid}/identities`),
+    ])
+      .then(([trackItems, identityItems]) => {
+        setTracks(trackItems)
+        setIdentities(identityItems)
+      })
+      .catch(() => {
+        setTracks([])
+        setIdentities([])
+      })
     api
-      .get<{ items: Track[] }>(`/projects/${pid}/tracks?video_id=${vid}&limit=1000`)
-      .then((r) => setTracks(r.items))
-      .catch(() => setTracks([]))
-    api
-      .get<{ items: Identity[] }>(`/projects/${pid}/identities?limit=200`)
-      .then((r) => setIdentities(r.items))
-      .catch(() => setIdentities([]))
+      .get<Array<{ track_id: number; segments: [number, number][] }>>(`/videos/${vid}/track-coverage`)
+      .then((r) => setTrackCoverage(r))
+      .catch(() => setTrackCoverage([]))
   }, [pid, vid])
 
   useEffect(() => {
     loadTracksAndIdentities()
   }, [loadTracksAndIdentities, sideRefreshKey])
+
+  const refreshWorkspaceData = useCallback(async () => {
+    await Promise.all([
+      loadDetections(),
+      loadTracksAndIdentities(),
+    ])
+  }, [loadDetections, loadTracksAndIdentities])
 
   // ========== 플레이백 ==========
   useEffect(() => {
@@ -235,6 +266,10 @@ export default function VideoAnnotator() {
             if (t) { e.preventDefault(); setFrame(t.end_frame) }
           }
           break
+        case "?":
+          e.preventDefault()
+          setShowShortcuts((v) => !v)
+          break
       }
     }
     window.addEventListener("keydown", handler)
@@ -245,20 +280,32 @@ export default function VideoAnnotator() {
   // ========== 공통 리프레시 ==========
   const refreshAll = useCallback(() => {
     setSaving(true)
-    Promise.all([
-      loadDetections(),
-      new Promise<void>((r) => { setSideRefreshKey((k) => k + 1); r() }),
-    ]).finally(() => setSaving(false))
-  }, [loadDetections])
+    refreshWorkspaceData()
+      .finally(() => {
+        setSideRefreshKey((k) => k + 1)
+        setSaving(false)
+      })
+  }, [refreshWorkspaceData])
 
   // ========== CRUD 핸들러 (with Undo) ==========
   const handleCreate = async (det: {
     frame_idx: number; x: number; y: number; w: number; h: number; class_name: string
   }) => {
+    const targetTrackId = selectedTrackId != null && tracks.some((t) => t.id === selectedTrackId)
+      ? selectedTrackId
+      : null
+    const targetIdentityId = targetTrackId == null ? selectedIdentityId : null
+
     try {
-      const created = await api.post<Detection>(`/videos/${vid}/detections`, { ...det, is_keyframe: true })
+      const payload = {
+        ...det,
+        is_keyframe: true,
+        ...(targetTrackId != null && { track_id: targetTrackId }),
+        ...(targetIdentityId != null && { identity_id: targetIdentityId }),
+      }
+      const created = await api.post<Detection>(`/videos/${vid}/detections`, payload)
       let lastCreatedId = created.id
-      const detData = { ...det, is_keyframe: true }
+      const detData = { ...payload }
 
       pushUndo({
         description: "Create detection",
@@ -272,7 +319,13 @@ export default function VideoAnnotator() {
           refreshAll()
         },
       })
-      refreshAll()
+      await refreshWorkspaceData()
+      setSideRefreshKey((k) => k + 1)
+      setSelectedDetectionId(created.id)
+      selectTrack(created.track_id ?? null)
+      if (targetIdentityId != null) {
+        selectIdentity(targetIdentityId)
+      }
     } catch { toast.error("Detection 생성 실패") }
   }
 
@@ -289,14 +342,14 @@ export default function VideoAnnotator() {
         description: "Move/resize detection",
         undo: async () => {
           await api.patch(`/detections/${id}`, oldBbox)
-          loadDetections()
+          refreshWorkspaceData()
         },
         redo: async () => {
           await api.patch(`/detections/${id}`, bbox)
-          loadDetections()
+          refreshWorkspaceData()
         },
       })
-      loadDetections()
+      refreshWorkspaceData()
     } catch { toast.error("Detection 수정 실패") }
   }
 
@@ -326,6 +379,7 @@ export default function VideoAnnotator() {
         },
       })
       setSelectedDetectionId(null)
+      selectTrack(null)
       refreshAll()
     } catch { toast.error("Detection 삭제 실패") }
   }
@@ -341,14 +395,14 @@ export default function VideoAnnotator() {
         description: "Toggle keyframe",
         undo: async () => {
           await api.patch(`/detections/${id}`, { is_keyframe: wasKeyframe })
-          loadDetections()
+          refreshWorkspaceData()
         },
         redo: async () => {
           await api.patch(`/detections/${id}`, { is_keyframe: !wasKeyframe })
-          loadDetections()
+          refreshWorkspaceData()
         },
       })
-      loadDetections()
+      refreshWorkspaceData()
     } catch { toast.error("키프레임 토글 실패") }
   }
   handleKeyframeToggleRef.current = handleKeyframeToggle
@@ -363,14 +417,14 @@ export default function VideoAnnotator() {
         description: "Change class",
         undo: async () => {
           await api.patch(`/detections/${id}`, { class_name: oldClassName })
-          loadDetections()
+          refreshWorkspaceData()
         },
         redo: async () => {
           await api.patch(`/detections/${id}`, { class_name: className })
-          loadDetections()
+          refreshWorkspaceData()
         },
       })
-      loadDetections()
+      refreshWorkspaceData()
     } catch { toast.error("클래스 변경 실패") }
   }
 
@@ -414,7 +468,20 @@ export default function VideoAnnotator() {
 
   const onSelect = (id: number | null) => setSelectedDetectionId(id)
 
-  // 데이터 수집
+  const drawTarget = (() => {
+    if (selectedTrackId != null && tracks.some((t) => t.id === selectedTrackId)) {
+      const t = tracks.find((t) => t.id === selectedTrackId)!
+      const ident = t.identity_id != null ? identities.find((i) => i.id === t.identity_id) : null
+      const label = ident?.label ?? ident?.class_name ?? null
+      return label ? `${label} / Track #${t.id}` : `Track #${t.id}`
+    }
+    if (selectedIdentityId != null) {
+      const ident = identities.find((i) => i.id === selectedIdentityId)
+      return ident ? (ident.label ?? `${ident.class_name} #${ident.id}`) : `Identity #${selectedIdentityId}`
+    }
+    return null
+  })()
+
   const defaultClass = classes[0] ?? "person"
   const selectedDet = detections.find((d) => d.id === selectedDetectionId)
 
@@ -439,21 +506,26 @@ export default function VideoAnnotator() {
             <Logo className="w-5 h-5" />
           </button>
           <button
+            onClick={() => navigate("/")}
+            className="text-muted-foreground hover:text-foreground transition-colors text-xs"
+          >
+            ← Projects
+          </button>
+          <span className="text-muted-foreground">/</span>
+          <button
             onClick={() => setMenuOpen((v) => !v)}
-            className="text-muted-foreground hover:text-foreground transition-colors text-base"
+            className="font-semibold hover:text-primary transition-colors"
             title="메뉴"
           >
-            ≡
+            {projectName || `Project #${pid}`} ▾
           </button>
           {menuOpen && (
-            <div className="absolute top-full left-0 mt-1 z-50 min-w-[140px] bg-popover border border-border rounded-md shadow-lg py-1 text-xs">
-              <button onClick={() => { navigate("/"); setMenuOpen(false) }} className="w-full text-left px-3 py-1.5 hover:bg-accent">프로젝트 홈</button>
+            <div className="absolute top-full left-8 mt-1 z-50 min-w-[140px] bg-popover border border-border rounded-md shadow-lg py-1 text-xs">
               <button onClick={() => { navigate(`/projects/${pid}/gallery`); setMenuOpen(false) }} className="w-full text-left px-3 py-1.5 hover:bg-accent">Crop Gallery</button>
               <div className="border-t border-border my-1" />
               <button onClick={() => { setShowExport(true); setMenuOpen(false) }} className="w-full text-left px-3 py-1.5 hover:bg-accent">내보내기</button>
             </div>
           )}
-          <span className="font-semibold">{projectName || `Project #${pid}`}</span>
           <span className="text-muted-foreground">/</span>
           <span className="text-muted-foreground text-xs">
             {videoMeta ? `${videoMeta.width}×${videoMeta.height} · ${videoMeta.fps.toFixed(0)}fps` : `Video #${vid}`}
@@ -466,19 +538,19 @@ export default function VideoAnnotator() {
             className="px-2.5 py-1 rounded border border-border hover:bg-accent transition-colors"
             title="Crop Gallery"
           >
-            🖼 Gallery
+            <LayoutGrid className="inline w-3.5 h-3.5 -mt-px" /> Gallery
           </button>
           <button
             onClick={() => setShowInference(true)}
-            className="px-2.5 py-1 rounded border border-border hover:bg-accent transition-colors"
+            className="px-2.5 py-1 rounded border border-border hover:bg-accent transition-colors flex items-center gap-1"
           >
-            ⚡ AI
+            <Zap className="w-3.5 h-3.5" /> AI
           </button>
           <button
             onClick={() => setShowExport(true)}
-            className="px-2.5 py-1 rounded border border-border hover:bg-accent transition-colors"
+            className="px-2.5 py-1 rounded border border-border hover:bg-accent transition-colors flex items-center gap-1"
           >
-            ⬇ Export
+            <Download className="w-3.5 h-3.5" /> Export
           </button>
         </div>
       </header>
@@ -486,26 +558,59 @@ export default function VideoAnnotator() {
       {/* ===== 메인 영역: 캔버스 + 사이드패널 ===== */}
       <div className="flex flex-1 overflow-hidden">
         {/* VideoCanvas */}
-        <div className="flex-1 overflow-hidden">
-          <VideoCanvas
-            videoId={vid}
-            frameIdx={currentFrame}
-            detections={detections}
-            videoWidth={videoMeta?.width ?? 1920}
-            videoHeight={videoMeta?.height ?? 1080}
-            tool={tool}
-            selectedDetectionId={selectedDetectionId}
-            defaultClass={defaultClass}
-            classes={classes}
-            onSelect={setSelectedDetectionId}
-            onCreate={handleCreate}
-            onUpdate={handleUpdate}
-            onDelete={handleDelete}
-            onKeyframeToggle={handleKeyframeToggle}
-            onClassChange={handleClassChange}
-            onDeleteAllOnFrame={handleDeleteAllOnFrame}
-            tracks={tracks}
-          />
+        <div className="flex-1 overflow-hidden relative">
+          {videoMeta ? (
+            <>
+              <VideoCanvas
+                videoId={vid}
+                frameIdx={currentFrame}
+                detections={detections}
+                videoWidth={videoMeta.width}
+                videoHeight={videoMeta.height}
+                tool={tool}
+                selectedDetectionId={selectedDetectionId}
+                defaultClass={defaultClass}
+                classes={classes}
+                onSelect={setSelectedDetectionId}
+                onCreate={handleCreate}
+                onUpdate={handleUpdate}
+                onDelete={handleDelete}
+                onKeyframeToggle={handleKeyframeToggle}
+                onClassChange={handleClassChange}
+                onDeleteAllOnFrame={handleDeleteAllOnFrame}
+                tracks={tracks}
+              />
+              {detections.length === 0 && tracks.length === 0 && !isPlaying && tool !== "box" && !showInference && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <div className="pointer-events-auto bg-card/90 backdrop-blur-sm border border-border rounded-lg p-6 max-w-xs text-center shadow-lg">
+                    <p className="text-sm font-medium text-foreground mb-2">아직 어노테이션이 없습니다</p>
+                    <p className="text-xs text-muted-foreground mb-4 leading-relaxed">
+                      AI로 자동 추론하거나,<br />
+                      <kbd className="bg-accent rounded px-1 py-0.5 text-[10px]">B</kbd> 키를 눌러 직접 박스를 그릴 수 있습니다.
+                    </p>
+                    <div className="flex gap-2 justify-center">
+                      <button
+                        onClick={() => setShowInference(true)}
+                        className="px-3 py-1.5 rounded bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
+                      >
+                        <Zap className="inline w-3.5 h-3.5 -mt-px" /> AI 추론 시작
+                      </button>
+                      <button
+                        onClick={() => setTool("box")}
+                        className="px-3 py-1.5 rounded border border-border text-xs text-muted-foreground hover:bg-accent hover:text-foreground transition-colors flex items-center gap-1"
+                      >
+                        <Square className="w-3.5 h-3.5" /> 직접 그리기
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="flex h-full items-center justify-center bg-background text-sm text-muted-foreground">
+              비디오 메타데이터를 불러오는 중입니다.
+            </div>
+          )}
         </div>
 
         {/* SidePanel */}
@@ -530,6 +635,7 @@ export default function VideoAnnotator() {
           {/* Identity/Track 트리 */}
           <div className="flex-1 overflow-auto">
             <TrackList
+              mode={sideTab}
               projectId={pid}
               videoId={vid}
               currentFrame={currentFrame}
@@ -680,6 +786,7 @@ export default function VideoAnnotator() {
           onChange={setFrame}
           tracks={tracks}
           identities={identities}
+          trackCoverage={trackCoverage}
         />
       </div>
 
@@ -687,11 +794,11 @@ export default function VideoAnnotator() {
       <div className="flex-shrink-0 border-t border-border px-3 py-1 flex items-center justify-between text-xs bg-card">
         {/* 재생 컨트롤 */}
         <div className="flex items-center gap-1">
-          <button onClick={() => setFrame(0)} className="p-1.5 hover:bg-accent rounded transition-colors" title="첨 프레임 (Home)">⏮</button>
-          <button onClick={() => setFrame(Math.max(0, currentFrame - 1))} className="p-1.5 hover:bg-accent rounded transition-colors" title="이전 프레임 (←)">◄</button>
-          <button onClick={() => setPlaying(!isPlaying)} className="px-3 py-1 hover:bg-accent rounded transition-colors font-medium" title="재생/일시정지 (Space)">{isPlaying ? "⏸" : "▶"}</button>
-          <button onClick={() => setFrame(Math.min(totalFrames - 1, currentFrame + 1))} className="p-1.5 hover:bg-accent rounded transition-colors" title="다음 프레임 (→)">►</button>
-          <button onClick={() => setFrame(totalFrames - 1)} className="p-1.5 hover:bg-accent rounded transition-colors" title="마지막 프레임 (End)">⏭</button>
+          <button onClick={() => setFrame(0)} className="p-1.5 hover:bg-accent rounded transition-colors" title="첨 프레임 (Home)"><SkipBack className="w-3.5 h-3.5" /></button>
+          <button onClick={() => setFrame(Math.max(0, currentFrame - 1))} className="p-1.5 hover:bg-accent rounded transition-colors" title="이전 프레임 (←)"><ChevronLeft className="w-3.5 h-3.5" /></button>
+          <button onClick={() => setPlaying(!isPlaying)} className="p-1.5 hover:bg-accent rounded transition-colors" title="재생/일시정지 (Space)">{isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}</button>
+          <button onClick={() => setFrame(Math.min(totalFrames - 1, currentFrame + 1))} className="p-1.5 hover:bg-accent rounded transition-colors" title="다음 프레임 (→)"><ChevronRight className="w-3.5 h-3.5" /></button>
+          <button onClick={() => setFrame(totalFrames - 1)} className="p-1.5 hover:bg-accent rounded transition-colors" title="마지막 프레임 (End)"><SkipForward className="w-3.5 h-3.5" /></button>
           {/* 속도 조절 */}
           <select
             value={playbackRate}
@@ -732,25 +839,80 @@ export default function VideoAnnotator() {
           <span>/ {totalFrames > 0 ? totalFrames - 1 : 0}</span>
         </div>
 
-        {/* 도구 선택 */}
-        <div className="flex items-center gap-1">
-          {([
-            { id: "select" as Tool, label: "🖱 선택", key: "V" },
-            { id: "box" as Tool, label: "⬛ 박스", key: "B" },
-          ] as const).map(({ id, label, key }) => (
+        {/* 선택 액션 + 도구 + 타겟 + 도움말 */}
+        <div className="flex items-center gap-1.5">
+          {selectedDet && (
+            <>
+              <div className="flex items-center gap-0.5 border border-border rounded-md px-1 py-0.5 bg-accent/30">
+                <button
+                  onClick={() => handleKeyframeToggle(selectedDet.id)}
+                  title="키프레임 토글 (K)"
+                  className={`px-1.5 py-0.5 rounded text-[10px] transition-colors ${
+                    selectedDet.is_keyframe
+                      ? "bg-yellow-500/20 text-yellow-400"
+                      : "hover:bg-accent text-muted-foreground"
+                  }`}
+                >
+                  <Star className={`w-3.5 h-3.5 ${selectedDet.is_keyframe ? "fill-current" : ""}`} />
+                </button>
+                <button
+                  onClick={() => handleDelete(selectedDet.id)}
+                  title="삭제 (Del)"
+                  className="px-1.5 py-0.5 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+                {classes.length > 1 && (
+                  <select
+                    value={selectedDet.class_name}
+                    onChange={(e) => handleClassChange(selectedDet.id, e.target.value)}
+                    className="bg-transparent border-none text-[10px] text-foreground cursor-pointer outline-none px-0.5"
+                    title="클래스 변경"
+                  >
+                    {classes.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+              <div className="w-px h-4 bg-border" />
+            </>
+          )}
+
+          {[
+            { id: "select" as Tool, label: "선택", key: "V", Icon: MousePointer2 },
+            { id: "box" as Tool, label: "박스", key: "B", Icon: Square },
+          ].map(({ id, label, key, Icon }) => (
             <button
               key={id}
               onClick={() => setTool(id)}
               title={`${label} (${key})`}
-              className={`px-2.5 py-1 rounded text-xs transition-colors ${
+              className={`px-2 py-1 rounded text-xs transition-colors flex items-center gap-1 ${
                 tool === id
-                  ? "bg-primary text-primary-foreground"
+                  ? "bg-primary text-primary-foreground font-medium ring-1 ring-primary/50"
                   : "hover:bg-accent text-muted-foreground hover:text-foreground"
               }`}
             >
-              {label}
+              <Icon className="w-3.5 h-3.5" />
+              <span>{label}</span>
+              <kbd className="text-[9px] opacity-60 ml-0.5">{key}</kbd>
             </button>
           ))}
+
+          {tool === "box" && (
+            <span className="text-[10px] text-muted-foreground border-l border-border pl-1.5 max-w-[160px] truncate">
+              {drawTarget ? `→ ${drawTarget}` : "→ 새 객체"}
+            </span>
+          )}
+
+          <div className="w-px h-4 bg-border ml-1" />
+          <button
+            onClick={() => setShowShortcuts(true)}
+            title="단축키 안내 (?)"
+            className="w-6 h-6 flex items-center justify-center rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors text-xs"
+          >
+            ?
+          </button>
         </div>
       </div>
       {showExport && (
@@ -758,6 +920,180 @@ export default function VideoAnnotator() {
       )}
       {showInference && (
         <InferencePanel projectId={pid} videoId={vid} onClose={() => setShowInference(false)} />
+      )}
+      {showShortcuts && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+          onClick={() => setShowShortcuts(false)}
+        >
+          <div
+            className="bg-popover border border-border rounded-lg shadow-lg p-6 max-w-2xl w-full mx-4 max-h-[80vh] overflow-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-foreground">Keyboard Shortcuts</h2>
+              <button
+                onClick={() => setShowShortcuts(false)}
+                className="text-muted-foreground hover:text-foreground transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="flex items-start gap-3">
+                <kbd className="font-mono bg-accent rounded px-1.5 py-0.5 text-xs text-foreground flex-shrink-0">Space</kbd>
+                <span className="text-sm text-muted-foreground">재생/일시정지</span>
+              </div>
+              <div className="flex items-start gap-3">
+                <kbd className="font-mono bg-accent rounded px-1.5 py-0.5 text-xs text-foreground flex-shrink-0">← / →</kbd>
+                <span className="text-sm text-muted-foreground">이전/다음 프레임</span>
+              </div>
+              <div className="flex items-start gap-3">
+                <kbd className="font-mono bg-accent rounded px-1.5 py-0.5 text-xs text-foreground flex-shrink-0">Shift+← / →</kbd>
+                <span className="text-sm text-muted-foreground">±10 프레임</span>
+              </div>
+              <div className="flex items-start gap-3">
+                <kbd className="font-mono bg-accent rounded px-1.5 py-0.5 text-xs text-foreground flex-shrink-0">Home / End</kbd>
+                <span className="text-sm text-muted-foreground">첫/마지막 프레임</span>
+              </div>
+              <div className="flex items-start gap-3">
+                <kbd className="font-mono bg-accent rounded px-1.5 py-0.5 text-xs text-foreground flex-shrink-0">B</kbd>
+                <span className="text-sm text-muted-foreground">박스 그리기 모드</span>
+              </div>
+              <div className="flex items-start gap-3">
+                <kbd className="font-mono bg-accent rounded px-1.5 py-0.5 text-xs text-foreground flex-shrink-0">V</kbd>
+                <span className="text-sm text-muted-foreground">선택 모드</span>
+              </div>
+              <div className="flex items-start gap-3">
+                <kbd className="font-mono bg-accent rounded px-1.5 py-0.5 text-xs text-foreground flex-shrink-0">K</kbd>
+                <span className="text-sm text-muted-foreground">키프레임 토글</span>
+              </div>
+              <div className="flex items-start gap-3">
+                <kbd className="font-mono bg-accent rounded px-1.5 py-0.5 text-xs text-foreground flex-shrink-0">Delete</kbd>
+                <span className="text-sm text-muted-foreground">선택 삭제</span>
+              </div>
+              <div className="flex items-start gap-3">
+                <kbd className="font-mono bg-accent rounded px-1.5 py-0.5 text-xs text-foreground flex-shrink-0">[ / ]</kbd>
+                <span className="text-sm text-muted-foreground">트랙 시작/끝으로 이동</span>
+              </div>
+              <div className="flex items-start gap-3">
+                <kbd className="font-mono bg-accent rounded px-1.5 py-0.5 text-xs text-foreground flex-shrink-0">Ctrl+Z</kbd>
+                <span className="text-sm text-muted-foreground">실행 취소</span>
+              </div>
+              <div className="flex items-start gap-3">
+                <kbd className="font-mono bg-accent rounded px-1.5 py-0.5 text-xs text-foreground flex-shrink-0">Ctrl+Shift+Z / Ctrl+Y</kbd>
+                <span className="text-sm text-muted-foreground">다시 실행</span>
+              </div>
+              <div className="flex items-start gap-3">
+                <kbd className="font-mono bg-accent rounded px-1.5 py-0.5 text-xs text-foreground flex-shrink-0">Escape</kbd>
+                <span className="text-sm text-muted-foreground">선택 해제</span>
+              </div>
+              <div className="flex items-start gap-3">
+                <kbd className="font-mono bg-accent rounded px-1.5 py-0.5 text-xs text-foreground flex-shrink-0">?</kbd>
+                <span className="text-sm text-muted-foreground">이 도움말</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {showOnboarding && videoMeta && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50">
+          <div className="bg-popover border border-border rounded-lg shadow-lg p-6 max-w-md w-full mx-4">
+            {onboardingStep === 0 && (
+              <>
+                <h2 className="text-lg font-semibold text-foreground mb-2">Moment Track에 오신 것을 환영합니다</h2>
+                <p className="text-sm text-muted-foreground mb-4 leading-relaxed">
+                  비디오 어노테이션 도구입니다. 핵심 조작법을 빠르게 안내해 드릴게요.
+                </p>
+                <div className="flex flex-col gap-3 mb-5">
+                  <div className="flex items-start gap-3">
+                    <Zap className="w-5 h-5 flex-shrink-0 text-primary mt-0.5" />
+                    <div>
+                      <p className="text-sm font-medium text-foreground">AI 자동 추론</p>
+                      <p className="text-xs text-muted-foreground">상단 AI 버튼으로 객체 감지 · 트래킹 · ReID를 실행하세요.</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <Square className="w-5 h-5 flex-shrink-0 text-primary mt-0.5" />
+                    <div>
+                      <p className="text-sm font-medium text-foreground">수동 박스 그리기</p>
+                      <p className="text-xs text-muted-foreground"><kbd className="bg-accent rounded px-1 text-[10px]">B</kbd> 키로 박스 모드 → 드래그로 그리기. <kbd className="bg-accent rounded px-1 text-[10px]">V</kbd> 키로 선택 모드 복귀.</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <MousePointer2 className="w-5 h-5 flex-shrink-0 text-primary mt-0.5" />
+                    <div>
+                      <p className="text-sm font-medium text-foreground">선택 & 편집</p>
+                      <p className="text-xs text-muted-foreground">박스 클릭으로 선택, 우클릭으로 클래스 변경 · 삭제. 하단 바에서도 액션 가능.</p>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+            {onboardingStep === 1 && (
+              <>
+                <h2 className="text-lg font-semibold text-foreground mb-2">Track & Identity 관리</h2>
+                <div className="flex flex-col gap-3 mb-5">
+                  <div className="flex items-start gap-3">
+                    <ClipboardList className="w-5 h-5 flex-shrink-0 text-primary mt-0.5" />
+                    <div>
+                      <p className="text-sm font-medium text-foreground">사이드패널</p>
+                      <p className="text-xs text-muted-foreground">오른쪽 패널에서 Identity와 Track을 관리합니다. 트랙의 메뉴 버튼으로 할당 · 분리 · 병합이 가능합니다.</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <Target className="w-5 h-5 flex-shrink-0 text-primary mt-0.5" />
+                    <div>
+                      <p className="text-sm font-medium text-foreground">기존 객체에 박스 추가</p>
+                      <p className="text-xs text-muted-foreground">사이드패널에서 Identity/Track을 선택한 뒤 박스를 그리면 해당 객체에 추가됩니다.</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <Keyboard className="w-5 h-5 flex-shrink-0 text-primary mt-0.5" />
+                    <div>
+                      <p className="text-sm font-medium text-foreground">단축키</p>
+                      <p className="text-xs text-muted-foreground">
+                        <kbd className="bg-accent rounded px-1 text-[10px]">Space</kbd> 재생 &nbsp;
+                        <kbd className="bg-accent rounded px-1 text-[10px]">←→</kbd> 프레임 이동 &nbsp;
+                        <kbd className="bg-accent rounded px-1 text-[10px]">?</kbd> 전체 단축키
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+            <div className="flex items-center justify-between">
+              <div className="flex gap-1.5">
+                {[0, 1].map((i) => (
+                  <div key={i} className={`w-2 h-2 rounded-full ${i === onboardingStep ? "bg-primary" : "bg-muted"}`} />
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={dismissOnboarding}
+                  className="px-3 py-1.5 rounded text-xs text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  건너뛰기
+                </button>
+                {onboardingStep < 1 ? (
+                  <button
+                    onClick={() => setOnboardingStep(1)}
+                    className="px-3 py-1.5 rounded bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
+                  >
+                    다음
+                  </button>
+                ) : (
+                  <button
+                    onClick={dismissOnboarding}
+                    className="px-3 py-1.5 rounded bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
+                  >
+                    시작하기
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

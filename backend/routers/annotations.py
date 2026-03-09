@@ -17,6 +17,7 @@ from backend.schemas.annotation import (
     IdentityUpdate,
     InterpolateRequest,
     InterpolateResponse,
+    TrackCoverageItem,
     TrackMergeRequest,
     TrackRead,
     TrackSplitRequest,
@@ -87,6 +88,11 @@ def interpolate_detections(
 
 
 # ---- Tracks ----
+
+
+@router.get("/videos/{video_id}/track-coverage", response_model=list[TrackCoverageItem])
+def track_coverage(video_id: int, db: Session = Depends(get_db)):
+    return annotation_service.get_track_coverage(db, video_id)
 
 
 @router.get("/projects/{project_id}/tracks", response_model=PaginatedResponse[TrackRead])

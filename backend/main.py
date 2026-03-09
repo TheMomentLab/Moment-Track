@@ -2,13 +2,12 @@
 
 from contextlib import asynccontextmanager
 
-from pathlib import Path
-
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
+from backend.config import settings
 from backend.db.database import init_db
 from backend.routers import annotations, export, inference, projects, videos
 
@@ -29,18 +28,17 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Routers
-app.include_router(projects.router, prefix="/api/v1", tags=["projects"])
-app.include_router(videos.router, prefix="/api/v1", tags=["videos"])
-app.include_router(annotations.router, prefix="/api/v1", tags=["annotations"])
-app.include_router(inference.router, prefix="/api/v1", tags=["inference"])
-app.include_router(export.router, prefix="/api/v1", tags=["export"])
+app.include_router(projects.router, prefix=settings.api_prefix, tags=["projects"])
+app.include_router(videos.router, prefix=settings.api_prefix, tags=["videos"])
+app.include_router(annotations.router, prefix=settings.api_prefix, tags=["annotations"])
+app.include_router(inference.router, prefix=settings.api_prefix, tags=["inference"])
+app.include_router(export.router, prefix=settings.api_prefix, tags=["export"])
 
 
 @app.get("/health")
@@ -48,8 +46,7 @@ async def health():
     return {"status": "ok"}
 
 
-# Serve React frontend (must be after API routes)
-_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+_DIST = settings.frontend_dist
 if _DIST.exists():
     app.mount("/assets", StaticFiles(directory=str(_DIST / "assets")), name="assets")
 

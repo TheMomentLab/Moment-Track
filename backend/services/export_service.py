@@ -7,15 +7,13 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from backend.config import settings
 from backend.db.models import Detection, Project, Track, Video
 from backend.schemas.export import ExportResponse, MotExportRequest, YoloExportRequest
 
-# Default export root: ~/.mt_track/projects/{id}/exports/
-_EXPORT_ROOT = Path.home() / ".mt_track" / "projects"
-
 
 def _export_dir(project_id: int) -> Path:
-    p = _EXPORT_ROOT / str(project_id) / "exports"
+    p = settings.export_root / str(project_id) / "exports"
     p.mkdir(parents=True, exist_ok=True)
     return p
 

@@ -5,6 +5,7 @@
  * <canvas>에 bbox 영역만 잘라 렌더링합니다.
  */
 import { useEffect, useRef, useState } from "react"
+import { AlertTriangle } from "lucide-react"
 
 interface CropItem {
   detection_id: number
@@ -15,7 +16,11 @@ interface CropItem {
   anomaly_score?: number | null
 }
 
-const ANOMALY_THRESHOLD = 0.5
+import { buildApiUrl } from "@/api/client"
+
+const DEFAULT_ANOMALY_THRESHOLD = 0.5
+const anomalyThreshold = Number(import.meta.env.VITE_ANOMALY_THRESHOLD ?? DEFAULT_ANOMALY_THRESHOLD)
+const ANOMALY_THRESHOLD = Number.isFinite(anomalyThreshold) ? anomalyThreshold : DEFAULT_ANOMALY_THRESHOLD
 
 interface CropCellProps {
   item: CropItem
@@ -23,17 +28,13 @@ interface CropCellProps {
   onClick: () => void
 }
 
-const API_BASE = "/api/v1"
-
 function CropCell({ item, selected, onClick }: CropCellProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [hoveredItem, setHoveredItem] = useState<CropItem | null>(null)
   const [hoverPos, setHoverPos] = useState({ x: 0, y: 0 })
-  const [loaded, setLoaded] = useState(false)
   const isAnomaly = item.anomaly_score != null && item.anomaly_score > ANOMALY_THRESHOLD
 
   useEffect(() => {
-    setLoaded(false)
     const canvas = canvasRef.current
     if (!canvas) return
     const ctx = canvas.getContext("2d")
@@ -41,14 +42,13 @@ function CropCell({ item, selected, onClick }: CropCellProps) {
 
     const img = new Image()
     img.crossOrigin = "anonymous"
-    img.src = `${API_BASE}/videos/${item.video_id}/frame/${item.frame_idx}`
+    img.src = buildApiUrl(`/videos/${item.video_id}/frame/${item.frame_idx}`)
     img.onload = () => {
       const { x, y, w, h } = item.bbox
       // 내부 해상도를 bbox 크기로 설정
       canvas.width = Math.max(1, Math.round(w))
       canvas.height = Math.max(1, Math.round(h))
       ctx.drawImage(img, x, y, w, h, 0, 0, canvas.width, canvas.height)
-      setLoaded(true)
     }
     img.onerror = () => {
       // 에러 시 fallback 표시
@@ -101,8 +101,8 @@ function CropCell({ item, selected, onClick }: CropCellProps) {
         style={{ imageRendering: "auto" }}
       />
       {isAnomaly && (
-        <div className="absolute top-0.5 right-0.5 w-4 h-4 flex items-center justify-center rounded-full bg-red-500/80 text-white text-[9px] leading-none">
-          ⚠
+        <div className="absolute top-0.5 right-0.5 w-4 h-4 flex items-center justify-center rounded-full bg-red-500/80 text-white">
+          <AlertTriangle className="w-2.5 h-2.5" />
         </div>
       )}
       <div className="absolute bottom-0 left-0 right-0 px-1 py-0.5 bg-black/60 text-[9px] text-white/80 tabular-nums truncate">
@@ -156,7 +156,7 @@ function PreviewTooltip({ item, x, y }: PreviewTooltipProps) {
       }}
     >
       <img
-        src={`${API_BASE}/videos/${item.video_id}/frame/${item.frame_idx}`}
+        src={buildApiUrl(`/videos/${item.video_id}/frame/${item.frame_idx}`)}
         alt="Preview"
         className="w-full h-full object-contain"
       />
@@ -174,8 +174,9 @@ interface Props {
 export default function CropGrid({ items, selectedDetectionId, onSelect, cols = 4 }: Props) {
   if (items.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full text-xs text-muted-foreground">
-        이 Identity에 속한 detection이 없습니다.
+      <div className="flex flex-col items-center justify-center h-full gap-2 text-xs text-muted-foreground">
+        <p>이 Identity에 속한 detection이 없습니다.</p>
+        <p className="text-[10px]">어노테이터에서 박스를 그리고 트랙을 이 Identity에 할당하세요.</p>
       </div>
     )
   }

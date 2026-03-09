@@ -1,11 +1,14 @@
 """Video business logic — video registration and frame extraction."""
 
 from pathlib import Path
+from uuid import uuid4
 
 import cv2
+from fastapi import UploadFile
 
 from sqlalchemy.orm import Session
 
+from backend.config import settings
 from backend.db.models import Project, Video
 from backend.schemas.video import VideoCreate, VideoMeta, VideoRead
 
@@ -24,6 +27,49 @@ def _serialize(video: Video) -> VideoRead:
     )
 
 
+def _get_project(db: Session, project_id: int) -> Project | None:
+    return db.query(Project).filter(Project.id == project_id).first()
+
+
+def _read_video_metadata(file_path: Path) -> tuple[float, int, int, int, float]:
+    cap = cv2.VideoCapture(str(file_path))
+    if not cap.isOpened():
+        raise ValueError(f"Cannot open video: {file_path}")
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.release()
+
+    duration_sec = total_frames / fps if fps > 0 else 0.0
+    return fps, width, height, total_frames, duration_sec
+
+
+def _create_video_row(
+    db: Session,
+    project_id: int,
+    file_path: Path,
+    camera_id: str,
+) -> VideoRead:
+    fps, width, height, total_frames, duration_sec = _read_video_metadata(file_path)
+
+    video = Video(
+        project_id=project_id,
+        file_path=str(file_path.resolve()),
+        camera_id=camera_id,
+        fps=fps,
+        width=width,
+        height=height,
+        total_frames=total_frames,
+        duration_sec=duration_sec,
+    )
+    db.add(video)
+    db.commit()
+    db.refresh(video)
+    return _serialize(video)
+
+
 def list_videos(db: Session, project_id: int, limit: int, offset: int) -> tuple[int, list[VideoRead]]:
     total = db.query(Video).filter(Video.project_id == project_id).count()
     rows = (
@@ -39,40 +85,49 @@ def list_videos(db: Session, project_id: int, limit: int, offset: int) -> tuple[
 def add_video(db: Session, project_id: int, body: VideoCreate) -> VideoRead | None:
     """Register a video file. Extracts metadata via cv2."""
     # Check project exists
-    project = db.query(Project).filter(Project.id == project_id).first()
+    project = _get_project(db, project_id)
     if project is None:
         return None
 
     file_path = Path(body.file_path)
     if not file_path.exists():
         raise ValueError(f"File not found: {file_path}")
+    return _create_video_row(db, project_id, file_path, body.camera_id)
 
-    cap = cv2.VideoCapture(str(file_path))
-    if not cap.isOpened():
-        raise ValueError(f"Cannot open video: {file_path}")
 
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    cap.release()
+async def upload_video_file(
+    db: Session,
+    project_id: int,
+    upload: UploadFile,
+    camera_id: str,
+) -> VideoRead | None:
+    project = _get_project(db, project_id)
+    if project is None:
+        return None
 
-    duration_sec = total_frames / fps if fps > 0 else 0.0
+    original_name = Path(upload.filename or "video.mp4")
+    suffix = original_name.suffix.lower()
+    if suffix not in {".mp4", ".avi", ".mov", ".mkv"}:
+        raise ValueError(f"Unsupported file type: {suffix or '<none>'}")
 
-    video = Video(
-        project_id=project_id,
-        file_path=str(file_path.resolve()),
-        camera_id=body.camera_id,
-        fps=fps,
-        width=width,
-        height=height,
-        total_frames=total_frames,
-        duration_sec=duration_sec,
-    )
-    db.add(video)
-    db.commit()
-    db.refresh(video)
-    return _serialize(video)
+    uploads_dir = settings.export_root / str(project_id) / "uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    stored_path = uploads_dir / f"{uuid4().hex}{suffix}"
+
+    with stored_path.open("wb") as handle:
+        while True:
+            chunk = await upload.read(1024 * 1024)
+            if not chunk:
+                break
+            handle.write(chunk)
+
+    await upload.close()
+
+    try:
+        return _create_video_row(db, project_id, stored_path, camera_id)
+    except Exception:
+        stored_path.unlink(missing_ok=True)
+        raise
 
 
 def get_video_meta(db: Session, video_id: int) -> VideoMeta | None:
@@ -107,7 +162,7 @@ def get_frame_jpeg(db: Session, video_id: int, frame_idx: int) -> bytes | None:
     if not ret:
         raise IOError(f"Could not read frame {frame_idx}")
 
-    success, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    success, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, settings.jpeg_quality])
     if not success:
         raise IOError("JPEG encoding failed")
 

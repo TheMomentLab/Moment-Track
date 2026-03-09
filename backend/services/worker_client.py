@@ -13,13 +13,11 @@ from datetime import datetime
 import httpx
 from sqlalchemy.orm import Session
 
+from backend.config import settings
 from backend.db.models import InferenceJob
 from backend.schemas.inference import DetectRequest, EmbedRequest, TrackRequest
 
 log = logging.getLogger(__name__)
-
-WORKER_URL = "http://127.0.0.1:8001"  # optional worker process
-WORKER_TIMEOUT = 2.0  # seconds — fail fast if worker not running
 
 
 def _create_job(db: Session, project_id: int, video_id: int, job_type: str, params: dict) -> InferenceJob:
@@ -41,9 +39,9 @@ def _dispatch(job_id: int, payload: dict) -> None:
     """Fire-and-forget HTTP POST to worker. Swallows all errors."""
     try:
         httpx.post(
-            f"{WORKER_URL}/run",
+            f"{settings.worker_url}/run",
             json={"job_id": job_id, **payload},
-            timeout=WORKER_TIMEOUT,
+            timeout=settings.worker_timeout,
         )
     except Exception:
         log.debug("Worker not available (job %d stays pending)", job_id)

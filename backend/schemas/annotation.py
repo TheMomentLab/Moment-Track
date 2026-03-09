@@ -16,6 +16,7 @@ class DetectionCreate(BaseModel):
     h: float = Field(..., gt=0)
     class_name: str
     track_id: int | None = None
+    identity_id: int | None = None
     is_keyframe: bool = True
 
 
@@ -123,6 +124,11 @@ class IdentityMergeRequest(BaseModel):
 class IdentityMergeResponse(BaseModel):
     merged_identity: IdentityRead
     moved_track_count: int
+
+
+class TrackCoverageItem(BaseModel):
+    track_id: int
+    segments: list[list[int]]
 
 
 class CropItem(BaseModel):

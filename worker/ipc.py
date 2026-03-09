@@ -10,6 +10,7 @@ from types import TracebackType
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from backend.config import settings
 from backend.db.database import Base
 from backend.db.models import Detection, Embedding, Identity, InferenceJob, Track, Video
 
@@ -25,10 +26,9 @@ def get_worker_db_session() -> Session:
     global _worker_session_factory
 
     if _worker_session_factory is None:
-        db_path = Path.home() / ".mt_track" / "mt_track.db"
-        db_path.parent.mkdir(parents=True, exist_ok=True)
+        settings.data_dir.mkdir(parents=True, exist_ok=True)
         _worker_engine = create_engine(
-            f"sqlite:///{db_path}", connect_args={"check_same_thread": False}
+            settings.database_url, connect_args={"check_same_thread": False}
         )
         Base.metadata.create_all(bind=_worker_engine)
         _worker_session_factory = sessionmaker(

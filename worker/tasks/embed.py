@@ -19,16 +19,24 @@ log = logging.getLogger(__name__)
 
 ParamValue = int | float | str | list[str] | None
 
+REID_INPUT_SIZE = (128, 256)
+IMAGENET_MEAN = [0.485, 0.456, 0.406]
+IMAGENET_STD = [0.229, 0.224, 0.225]
+DEFAULT_REID_MODEL = "osnet_x1_0"
+DEFAULT_REID_NUM_CLASSES = 1000
+FALLBACK_MODEL = "resnet50"
+DEFAULT_BATCH_SIZE = 64
+
 
 def _prepare_tensor(torch_module: Any, crop: np.ndarray) -> Any:
-    resized = cv2.resize(crop, (128, 256), interpolation=cv2.INTER_LINEAR)
+    resized = cv2.resize(crop, REID_INPUT_SIZE, interpolation=cv2.INTER_LINEAR)
     rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
     image = rgb.astype(np.float32) / 255.0
     image = np.transpose(image, (2, 0, 1))
 
     tensor = torch_module.from_numpy(image)
-    mean = torch_module.tensor([0.485, 0.456, 0.406], dtype=tensor.dtype).view(3, 1, 1)
-    std = torch_module.tensor([0.229, 0.224, 0.225], dtype=tensor.dtype).view(3, 1, 1)
+    mean = torch_module.tensor(IMAGENET_MEAN, dtype=tensor.dtype).view(3, 1, 1)
+    std = torch_module.tensor(IMAGENET_STD, dtype=tensor.dtype).view(3, 1, 1)
     return (tensor - mean) / std
 
 
@@ -39,24 +47,26 @@ def _load_model(torch_module: Any, device: str, model_path: str) -> tuple[Any, s
         torchreid = None
 
     if torchreid is not None:
-        model = torchreid.models.build_model(name="osnet_x1_0", num_classes=1000, pretrained=True)
+        model = torchreid.models.build_model(
+            name=DEFAULT_REID_MODEL, num_classes=DEFAULT_REID_NUM_CLASSES, pretrained=True
+        )
         if model_path and Path(model_path).exists():
             state_dict = torch_module.load(model_path, map_location=device)
             model.load_state_dict(state_dict, strict=False)
         model.eval()
         model.to(device)
-        return model, "torchreid:osnet_x1_0"
+        return model, f"torchreid:{DEFAULT_REID_MODEL}"
 
     models = import_module("torchvision.models")
     weights = getattr(models, "ResNet50_Weights", None)
     if weights is not None:
-        model = models.resnet50(weights=weights.DEFAULT)
+        model = getattr(models, FALLBACK_MODEL)(weights=weights.DEFAULT)
     else:
-        model = models.resnet50(pretrained=True)
+        model = getattr(models, FALLBACK_MODEL)(pretrained=True)
     model.fc = torch_module.nn.Identity()
     model.eval()
     model.to(device)
-    return model, "torchvision:resnet50"
+    return model, f"torchvision:{FALLBACK_MODEL}"
 
 
 def run_embed(job_id: int, params: Mapping[str, object], reporter: JobReporter) -> None:
@@ -67,8 +77,8 @@ def run_embed(job_id: int, params: Mapping[str, object], reporter: JobReporter) 
 
     model_path = str(params.get("model_path", ""))
 
-    raw_batch_size = params.get("batch_size", 64)
-    batch_size = int(raw_batch_size) if isinstance(raw_batch_size, (int, float, str)) else 64
+    raw_batch_size = params.get("batch_size", DEFAULT_BATCH_SIZE)
+    batch_size = int(raw_batch_size) if isinstance(raw_batch_size, (int, float, str)) else DEFAULT_BATCH_SIZE
     batch_size = max(1, batch_size)
 
     try:

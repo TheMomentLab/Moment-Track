@@ -4,11 +4,13 @@
 import { useEffect, useRef, useState } from "react"
 import { Stage, Layer, Image as KonvaImage, Rect, Group, Text } from "react-konva"
 import type Konva from "konva"
+import { buildApiUrl } from "@/api/client"
 import type { Detection, Track, Tool } from "@/types"
 
 const MIN_ZOOM = 0.2
 const MAX_ZOOM = 5
 const WHEEL_ZOOM_FACTOR = 1.05
+const MIN_DRAW_SIZE_PX = 5
 
 const IDENTITY_PALETTE = [
   "#FF6B6B", "#4ECDC4", "#FFE66D", "#6C5CE7",
@@ -88,7 +90,7 @@ export default function VideoCanvas({
     const img = new window.Image()
     img.onload = () => setFrameImage(img)
     img.onerror = () => setFrameImage(null)
-    img.src = `/api/v1/videos/${videoId}/frame/${frameIdx}`
+    img.src = buildApiUrl(`/videos/${videoId}/frame/${frameIdx}`)
     return () => { img.src = "" }
   }, [videoId, frameIdx])
 
@@ -194,7 +196,9 @@ export default function VideoCanvas({
 
     if (tool !== "box" || !drawStart.current || !drawing) return
     drawStart.current = null
-    if (drawing.w > 5 && drawing.h > 5) {
+    const screenWidth = drawing.w * fitScale * zoomScale
+    const screenHeight = drawing.h * fitScale * zoomScale
+    if (screenWidth > MIN_DRAW_SIZE_PX && screenHeight > MIN_DRAW_SIZE_PX) {
       onCreate({ frame_idx: frameIdx, ...drawing, class_name: defaultClass })
     }
     setDrawing(null)
@@ -296,7 +300,7 @@ export default function VideoCanvas({
   return (
     <div
       ref={containerRef}
-      className="relative w-full h-full overflow-hidden bg-black outline-none"
+      className={`relative w-full h-full overflow-hidden bg-black outline-none ${tool === "box" ? "cursor-crosshair" : "cursor-default"}`}
       tabIndex={0}
       onPointerDown={() => containerRef.current?.focus()}
       onKeyDown={handleContainerKeyDown}
@@ -404,9 +408,10 @@ export default function VideoCanvas({
                       e.cancelBubble = true
                       const containerRect = containerRef.current?.getBoundingClientRect()
                       if (!containerRect) return
+                      const menuW = 180, menuH = 150
                       setContextMenu({
-                        x: e.evt.clientX - containerRect.left,
-                        y: e.evt.clientY - containerRect.top,
+                        x: Math.min(e.evt.clientX - containerRect.left, containerRect.width - menuW),
+                        y: Math.min(e.evt.clientY - containerRect.top, containerRect.height - menuH),
                         detectionId: det.id,
                       })
                     }}
@@ -440,6 +445,37 @@ export default function VideoCanvas({
           </Layer>
         </Stage>
       )}
+
+      {/* Zoom overlay — top-right corner */}
+      <div className="absolute top-2 right-2 flex items-center gap-0.5 bg-black/60 backdrop-blur-sm rounded-md px-1 py-0.5 text-[11px] text-white/90 select-none z-10">
+        <button
+          onClick={() => {
+            const pivot = lastPointer.current ?? { x: containerSize.width / 2, y: containerSize.height / 2 }
+            updateZoomAtPoint(pivot, (z) => z / WHEEL_ZOOM_FACTOR)
+          }}
+          className="w-6 h-6 flex items-center justify-center rounded hover:bg-white/20 transition-colors"
+          title="축소 (Ctrl+−)"
+        >
+          −
+        </button>
+        <button
+          onClick={() => { setZoomScale(1); setStageOffset({ x: 0, y: 0 }) }}
+          className="min-w-[40px] h-6 flex items-center justify-center rounded hover:bg-white/20 transition-colors font-mono text-[10px]"
+          title="줌 리셋 (Ctrl+0)"
+        >
+          {Math.round(zoomScale * 100)}%
+        </button>
+        <button
+          onClick={() => {
+            const pivot = lastPointer.current ?? { x: containerSize.width / 2, y: containerSize.height / 2 }
+            updateZoomAtPoint(pivot, (z) => z * WHEEL_ZOOM_FACTOR)
+          }}
+          className="w-6 h-6 flex items-center justify-center rounded hover:bg-white/20 transition-colors"
+          title="확대 (Ctrl++)"
+        >
+          +
+        </button>
+      </div>
 
       {contextMenu && contextDetection && (
         <div

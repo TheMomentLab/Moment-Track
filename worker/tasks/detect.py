@@ -15,6 +15,10 @@ from worker.ipc import JobReporter
 
 log = logging.getLogger(__name__)
 
+DEFAULT_CONF_THRESHOLD = 0.5
+DEFAULT_IOU_THRESHOLD = 0.45
+DEFAULT_CLASS_NAME = "object"
+
 
 def _as_int(value: object, default: int) -> int:
     if value is None:
@@ -52,8 +56,8 @@ def run_detect(job_id: int, params: Mapping[str, object], reporter: JobReporter)
     frame_start = _as_int(params.get("frame_start"), 0)
     frame_end = params.get("frame_end")
     classes = _as_str_list(params.get("classes"))
-    conf_threshold = _as_float(params.get("conf_threshold"), 0.5)
-    iou_threshold = _as_float(params.get("iou_threshold"), 0.45)
+    conf_threshold = _as_float(params.get("conf_threshold"), DEFAULT_CONF_THRESHOLD)
+    iou_threshold = _as_float(params.get("iou_threshold"), DEFAULT_IOU_THRESHOLD)
 
     try:
         torch = import_module("torch")
@@ -126,7 +130,7 @@ def run_detect(job_id: int, params: Mapping[str, object], reporter: JobReporter)
                     width = max(0.0, x2 - x1)
                     height = max(0.0, y2 - y1)
 
-                    class_name = "object"
+                    class_name = DEFAULT_CLASS_NAME
                     if cls_ids is not None:
                         class_idx = int(cls_ids[idx])
                         class_name = str(names.get(class_idx, class_idx))

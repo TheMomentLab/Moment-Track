@@ -34,6 +34,9 @@ gpu = [
     "ultralytics>=8.1.0",
 ]
 
+[tool.hatch.build.targets.wheel]
+packages = ["backend", "worker", "scripts"]
+
 [tool.ruff]
 target-version = "py310"
 line-length = 100

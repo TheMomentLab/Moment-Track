@@ -9,6 +9,7 @@ from typing import TypeAlias
 import uvicorn
 from fastapi import FastAPI
 
+from backend.config import settings
 from worker.ipc import JobReporter
 from worker.tasks.detect import run_detect
 from worker.tasks.embed import run_embed
@@ -85,8 +86,8 @@ def run(payload: TaskPayload) -> dict[str, str]:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
     _probe_optional_packages()
-    log.info("Moment Track GPU Worker started on port 8001")
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    log.info("Moment Track GPU Worker started on port %d", settings.worker_port)
+    uvicorn.run(app, host=settings.worker_host, port=settings.worker_port)
 
 
 if __name__ == "__main__":

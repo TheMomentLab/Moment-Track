@@ -1,13 +1,22 @@
 """Export router — dataset export in various formats."""
 
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from backend.config import settings
 from backend.db.database import get_db
-from backend.schemas.export import ExportResponse, MotExportRequest, YoloExportRequest
+from backend.schemas.export import ExportInfoResponse, ExportResponse, MotExportRequest, YoloExportRequest
 from backend.services import export_service
 
 router = APIRouter()
+
+
+@router.get("/projects/{project_id}/export/info", response_model=ExportInfoResponse)
+def get_export_info(project_id: int):
+    export_dir = settings.export_root / str(project_id) / "exports"
+    return ExportInfoResponse(export_dir=str(Path(export_dir)))
 
 
 @router.post(

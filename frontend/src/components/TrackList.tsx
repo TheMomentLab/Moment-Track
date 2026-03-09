@@ -11,8 +11,9 @@
  */
 import { useEffect, useState, useCallback, useRef } from "react"
 import { toast } from "sonner"
-import { api } from "@/api/client"
+import { api, getAllPaginated } from "@/api/client"
 import type { Identity, Track } from "@/types"
+import { Pencil, MoreHorizontal, X, Plus, Zap } from "lucide-react"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -42,6 +43,7 @@ interface CtxMenu {
 }
 
 interface Props {
+  mode?: "identities" | "tracks"
   projectId: number
   videoId: number
   currentFrame: number        // needed for "split at current frame"
@@ -56,6 +58,7 @@ interface Props {
 }
 
 export default function TrackList({
+  mode = "identities",
   projectId, videoId, currentFrame,
   selectedIdentityId, selectedTrackId,
   defaultClass,
@@ -88,11 +91,11 @@ export default function TrackList({
     setLoading(true)
     try {
       const [ir, tr] = await Promise.all([
-        api.get<{ items: Identity[] }>(`/projects/${projectId}/identities?limit=200`),
-        api.get<{ items: Track[] }>(`/projects/${projectId}/tracks?video_id=${videoId}&limit=200`),
+        getAllPaginated<Identity>(`/projects/${projectId}/identities`),
+        getAllPaginated<Track>(`/projects/${projectId}/tracks?video_id=${videoId}`),
       ])
-      setIdentities(ir.items)
-      setTracks(tr.items)
+      setIdentities(ir)
+      setTracks(tr)
     } catch {}
     finally { setLoading(false) }
   }, [projectId, videoId])
@@ -123,6 +126,11 @@ export default function TrackList({
   // ---- helpers ----
   const tracksByIdentity = (id: number) => tracks.filter((t) => t.identity_id === id)
   const unassigned = tracks.filter((t) => t.identity_id === null)
+  const sortedTracks = [...tracks].sort((a, b) => {
+    if (a.identity_id === null && b.identity_id !== null) return 1
+    if (a.identity_id !== null && b.identity_id === null) return -1
+    return a.start_frame - b.start_frame || a.id - b.id
+  })
 
   const toggleExpanded = (id: number) =>
     setExpanded((prev) => {
@@ -234,7 +242,7 @@ export default function TrackList({
   // ---- render helpers ----
   const handleTrackContextMenu = (e: React.MouseEvent, trackId: number) => {
     e.preventDefault()
-    setCtx({ trackId, x: e.clientX, y: e.clientY })
+    setCtx({ trackId, x: Math.min(e.clientX, window.innerWidth - 200), y: Math.min(e.clientY, window.innerHeight - 200) })
     setAssigningTrackId(null)
   }
 
@@ -297,19 +305,24 @@ export default function TrackList({
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* ---- Identity list ---- */}
       <div className="flex flex-col overflow-auto text-sm">
+        {mode === "identities" && (
+          <button
+            onClick={createIdentity}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs text-primary hover:bg-accent transition-colors border-b border-border"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>New Identity</span>
+          </button>
+        )}
 
-        {/* New Identity button */}
-        <button
-          onClick={createIdentity}
-          className="flex items-center gap-1.5 px-3 py-2 text-xs text-primary hover:bg-accent transition-colors border-b border-border"
-        >
-          <span className="text-base leading-none">＋</span>
-          <span>New Identity</span>
-        </button>
+        {mode === "tracks" && (
+          <div className="px-3 py-2 border-b border-border text-[10px] uppercase tracking-wider text-muted-foreground">
+            Tracks ({tracks.length})
+          </div>
+        )}
 
-        {identities.map((identity) => {
+        {mode === "identities" && identities.map((identity) => {
           const itracks = tracksByIdentity(identity.id)
           const isExpanded = expanded.has(identity.id)
           const isSelected = identity.id === selectedIdentityId
@@ -371,18 +384,30 @@ export default function TrackList({
 
                 <span className="text-[10px] text-muted-foreground flex-shrink-0">{identity.class_name}</span>
 
-                {/* delete button — visible on hover */}
                 {!isEditing && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setDeleteIdentityTarget(identity.id)
-                    }}
-                    className="opacity-0 group-hover:opacity-100 ml-1 w-4 h-4 flex items-center justify-center rounded hover:bg-destructive/20 text-destructive text-[10px] transition-opacity flex-shrink-0"
-                    title="Identity 삭제"
-                  >
-                    ×
-                  </button>
+                  <div className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity flex-shrink-0">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setEditLabel(identity.label ?? "")
+                        setEditingIdentityId(identity.id)
+                      }}
+                      className="w-4 h-4 flex items-center justify-center rounded hover:bg-accent text-muted-foreground"
+                      title="이름 편집"
+                    >
+                      <Pencil className="w-3 h-3" />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setDeleteIdentityTarget(identity.id)
+                      }}
+                      className="w-4 h-4 flex items-center justify-center rounded hover:bg-destructive/20 text-destructive"
+                      title="Identity 삭제"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -394,7 +419,7 @@ export default function TrackList({
                     key={track.id}
                     onContextMenu={(e) => handleTrackContextMenu(e, track.id)}
                     onClick={() => { onSelectTrack(track.id); onFrameChange(track.start_frame) }}
-                    className={`flex items-center gap-2 pl-8 pr-2 py-1 cursor-pointer hover:bg-accent/60 transition-colors text-xs ${isTSelected ? "bg-accent/40" : ""}`}
+                    className={`group/track flex items-center gap-2 pl-8 pr-2 py-1 cursor-pointer hover:bg-accent/60 transition-colors text-xs ${isTSelected ? "bg-accent/40" : ""}`}
                   >
                     <span
                       className="w-1.5 h-1.5 rounded-full flex-shrink-0"
@@ -404,6 +429,16 @@ export default function TrackList({
                     <span className="text-[10px] text-muted-foreground tabular-nums">
                       f{track.start_frame}–{track.end_frame}
                     </span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleTrackContextMenu(e, track.id)
+                      }}
+                      className="opacity-0 group-hover/track:opacity-100 w-4 h-4 flex items-center justify-center rounded hover:bg-accent text-muted-foreground transition-opacity flex-shrink-0"
+                      title="트랙 메뉴"
+                    >
+                      <MoreHorizontal className="w-3 h-3" />
+                    </button>
                   </div>
                 )
               })}
@@ -411,8 +446,7 @@ export default function TrackList({
           )
         })}
 
-        {/* ---- Unassigned tracks ---- */}
-        {unassigned.length > 0 && (
+        {mode === "identities" && unassigned.length > 0 && (
           <div>
             <div className="px-3 py-1.5 text-[10px] text-muted-foreground font-semibold uppercase tracking-wider border-t border-border mt-1">
               미할당 ({unassigned.length})
@@ -422,24 +456,101 @@ export default function TrackList({
                 key={track.id}
                 onContextMenu={(e) => handleTrackContextMenu(e, track.id)}
                 onClick={() => { onSelectTrack(track.id); onFrameChange(track.start_frame) }}
-                className={`flex items-center gap-2 pl-6 pr-2 py-1 cursor-pointer hover:bg-accent/60 text-xs ${track.id === selectedTrackId ? "bg-accent/40" : ""}`}
+                className={`group/track flex items-center gap-2 pl-6 pr-2 py-1 cursor-pointer hover:bg-accent/60 text-xs ${track.id === selectedTrackId ? "bg-accent/40" : ""}`}
               >
                 <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground flex-shrink-0" />
                 <span className="flex-1 text-muted-foreground">Track #{track.id}</span>
                 <span className="text-[10px] text-muted-foreground tabular-nums">
                   f{track.start_frame}–{track.end_frame}
                 </span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleTrackContextMenu(e, track.id)
+                  }}
+                  className="opacity-0 group-hover/track:opacity-100 w-4 h-4 flex items-center justify-center rounded hover:bg-accent text-muted-foreground transition-opacity flex-shrink-0"
+                  title="트랙 메뉴"
+                >
+                  <MoreHorizontal className="w-3 h-3" />
+                </button>
               </div>
             ))}
           </div>
         )}
 
-        {identities.length === 0 && unassigned.length === 0 && (
-          <p className="text-xs text-muted-foreground p-4 text-center leading-relaxed">
-            아직 Identity가 없습니다.<br />
-            "+ New Identity"로 추가하거나<br />
-            Detection을 만들면 트랙이 자동 생성됩니다.
-          </p>
+        {mode === "tracks" && sortedTracks.map((track) => {
+          const identity = track.identity_id != null
+            ? identities.find((item) => item.id === track.identity_id)
+            : null
+
+          return (
+            <div
+              key={track.id}
+              onContextMenu={(e) => handleTrackContextMenu(e, track.id)}
+              onClick={() => {
+                onSelectTrack(track.id)
+                onSelectIdentity(identity?.id ?? null)
+                onFrameChange(track.start_frame)
+              }}
+              className={`group/track flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-accent/60 text-xs border-b border-border/50 ${
+                track.id === selectedTrackId ? "bg-accent/40" : ""
+              }`}
+            >
+              <span
+                className="w-2 h-2 rounded-full flex-shrink-0"
+                style={{ background: track.identity_id == null ? "#94a3b8" : trackColor(track.identity_id) }}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-foreground font-medium">Track #{track.id}</span>
+                  <span className="text-[10px] text-muted-foreground tabular-nums">
+                    f{track.start_frame}-{track.end_frame}
+                  </span>
+                </div>
+                <div className="truncate text-[10px] text-muted-foreground">
+                  {identity ? `${identity.label ?? `Identity #${identity.id}`} · ${identity.class_name}` : "미할당 Identity"}
+                </div>
+              </div>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  handleTrackContextMenu(e, track.id)
+                }}
+                className="opacity-0 group-hover/track:opacity-100 w-5 h-5 flex items-center justify-center rounded hover:bg-accent text-muted-foreground transition-opacity flex-shrink-0"
+                title="트랙 메뉴"
+              >
+                <MoreHorizontal className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )
+        })}
+
+        {identities.length === 0 && unassigned.length === 0 && mode === "identities" && (
+          <div className="p-4 text-center">
+            <p className="text-xs text-muted-foreground leading-relaxed mb-3">
+              아직 Identity / Track이 없습니다.
+            </p>
+            <div className="flex flex-col gap-1.5 text-[10px] text-muted-foreground">
+              <div className="flex items-center gap-2 px-2">
+                <Zap className="w-3.5 h-3.5 flex-shrink-0" />
+                <span className="text-left">AI 추론으로 자동 생성</span>
+              </div>
+              <div className="flex items-center gap-2 px-2">
+                <kbd className="bg-accent rounded px-1 py-0.5 text-[9px] font-mono">B</kbd>
+                <span className="text-left">박스 도구로 직접 그리기</span>
+              </div>
+              <div className="flex items-center gap-2 px-2">
+                <Plus className="w-3.5 h-3.5 flex-shrink-0" />
+                <span className="text-left">위 버튼으로 Identity 추가</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {mode === "tracks" && tracks.length === 0 && (
+          <div className="p-4 text-center text-xs text-muted-foreground">
+            아직 Track이 없습니다.
+          </div>
         )}
       </div>
 

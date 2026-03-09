@@ -27,3 +27,7 @@ class ExportResponse(BaseModel):
     frame_count: int
     detection_count: int
     track_count: int | None = None
+
+
+class ExportInfoResponse(BaseModel):
+    export_dir: str

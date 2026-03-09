@@ -6,7 +6,7 @@ import numpy as np
 
 from sqlalchemy.orm import Session
 
-from backend.db.models import Detection, Embedding, Identity, Track
+from backend.db.models import Detection, Embedding, Identity, Track, Video
 from backend.schemas.annotation import (
     CropItem,
     DetectionCreate,
@@ -17,6 +17,7 @@ from backend.schemas.annotation import (
     IdentityRead,
     IdentityUpdate,
     InterpolateResponse,
+    TrackCoverageItem,
     TrackRead,
     TrackUpdate,
 )
@@ -91,11 +92,43 @@ def list_detections(
 
 
 def create_detection(db: Session, video_id: int, body: DetectionCreate) -> DetectionRead:
+    video = db.query(Video).filter(Video.id == video_id).first()
+    if video is None:
+        raise ValueError(f"Video {video_id} not found")
+
     track_id = body.track_id
 
-    # If no track_id given, create a new Track for this detection
+    if track_id is None and body.identity_id is not None:
+        existing_track = (
+            db.query(Track)
+            .filter(Track.identity_id == body.identity_id, Track.video_id == video_id)
+            .first()
+        )
+        if existing_track is not None:
+            track_id = existing_track.id
+        else:
+            track = Track(
+                identity_id=body.identity_id,
+                video_id=video_id,
+                start_frame=body.frame_idx,
+                end_frame=body.frame_idx,
+                source="manual",
+            )
+            db.add(track)
+            db.flush()
+            track_id = track.id
+
     if track_id is None:
+        identity = Identity(
+            project_id=video.project_id,
+            label=None,
+            class_name=body.class_name,
+        )
+        db.add(identity)
+        db.flush()
+
         track = Track(
+            identity_id=identity.id,
             video_id=video_id,
             start_frame=body.frame_idx,
             end_frame=body.frame_idx,
@@ -398,20 +431,24 @@ def delete_identity(db: Session, identity_id: int) -> bool:
     return True
 
 
+ANOMALY_MIN_SAMPLES = 3
+ANOMALY_NORM_EPSILON = 1e-9
+ANOMALY_SCORE_PRECISION = 4
+
+
 def _compute_anomaly_scores(
     db: Session, all_detection_ids: list[int], page_detection_ids: list[int],
 ) -> dict[int, float]:
     """Compute anomaly scores based on cosine distance from identity's mean embedding."""
-    if len(all_detection_ids) < 3:
+    if len(all_detection_ids) < ANOMALY_MIN_SAMPLES:
         return {}
 
-    # Fetch all embeddings for this identity's detections
     embeddings = (
         db.query(Embedding)
         .filter(Embedding.detection_id.in_(all_detection_ids))
         .all()
     )
-    if len(embeddings) < 3:
+    if len(embeddings) < ANOMALY_MIN_SAMPLES:
         return {}
 
     try:
@@ -422,7 +459,7 @@ def _compute_anomaly_scores(
         mat = np.stack(list(vectors.values()))
         mean_vec = mat.mean(axis=0)
         mean_norm = np.linalg.norm(mean_vec)
-        if mean_norm < 1e-9:
+        if mean_norm < ANOMALY_NORM_EPSILON:
             return {}
 
         scores: dict[int, float] = {}
@@ -431,11 +468,11 @@ def _compute_anomaly_scores(
             if vec is None:
                 continue
             vec_norm = np.linalg.norm(vec)
-            if vec_norm < 1e-9:
+            if vec_norm < ANOMALY_NORM_EPSILON:
                 scores[det_id] = 1.0
                 continue
             cos_sim = float(np.dot(vec, mean_vec) / (vec_norm * mean_norm))
-            scores[det_id] = round(max(0.0, 1.0 - cos_sim), 4)
+            scores[det_id] = round(max(0.0, 1.0 - cos_sim), ANOMALY_SCORE_PRECISION)
         return scores
     except Exception:
         logging.getLogger(__name__).debug("Anomaly score computation failed", exc_info=True)
@@ -482,3 +519,34 @@ def get_identity_crops(
         for d in page
     ]
     return total, items
+
+
+def get_track_coverage(db: Session, video_id: int) -> list[TrackCoverageItem]:
+    rows = (
+        db.query(Detection.track_id, Detection.frame_idx)
+        .filter(Detection.video_id == video_id, Detection.track_id.isnot(None))
+        .order_by(Detection.track_id, Detection.frame_idx)
+        .all()
+    )
+    if not rows:
+        return []
+
+    by_track: dict[int, list[int]] = {}
+    for track_id, frame_idx in rows:
+        by_track.setdefault(track_id, []).append(frame_idx)
+
+    result: list[TrackCoverageItem] = []
+    for track_id, frames in by_track.items():
+        unique = sorted(set(frames))
+        segments: list[list[int]] = []
+        seg_start = unique[0]
+        prev = unique[0]
+        for f in unique[1:]:
+            if f > prev + 1:
+                segments.append([seg_start, prev])
+                seg_start = f
+            prev = f
+        segments.append([seg_start, prev])
+        result.append(TrackCoverageItem(track_id=track_id, segments=segments))
+
+    return result

@@ -1,16 +1,21 @@
 /**
  * ExportDialog — YOLO / MOT 포맷 내보내기 다이얼로그
  */
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { toast } from "sonner"
 import { api } from "@/api/client"
 import { useProjectStore } from "@/stores/projectStore"
+import { ClipboardCopy } from "lucide-react"
 
 interface ExportResponse {
   output_path: string
   frame_count: number
   detection_count: number
   track_count: number | null
+}
+
+interface ExportInfo {
+  export_dir: string
 }
 
 interface Props {
@@ -34,6 +39,13 @@ export default function ExportDialog({ projectId, onClose }: Props) {
   const [result, setResult] = useState<ExportResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [createSnapshot, setCreateSnapshot] = useState(true)
+  const [exportDir, setExportDir] = useState<string | null>(null)
+
+  useEffect(() => {
+    api.get<ExportInfo>(`/projects/${projectId}/export/info`)
+      .then((info) => setExportDir(info.export_dir))
+      .catch(() => setExportDir(null))
+  }, [projectId])
 
   const toggleClass = (cls: string) => {
     setSelectedClasses((prev) =>
@@ -80,11 +92,17 @@ export default function ExportDialog({ projectId, onClose }: Props) {
       <div className="bg-popover border border-border rounded-lg shadow-xl w-[420px] max-h-[90vh] overflow-auto text-sm">
         {/* header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-          <h2 className="font-semibold">Export Dataset</h2>
+          <h2 className="font-semibold">데이터셋 내보내기</h2>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground">✕</button>
         </div>
 
         <div className="px-5 py-4 flex flex-col gap-4">
+          {exportDir && (
+            <div className="rounded border border-border bg-accent/20 px-3 py-2 text-xs text-muted-foreground">
+              저장 위치: <span className="font-mono text-foreground break-all">{exportDir}</span>
+            </div>
+          )}
+
           {/* format selector */}
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Format</label>
@@ -225,7 +243,7 @@ export default function ExportDialog({ projectId, onClose }: Props) {
                   className="flex-shrink-0 px-2 py-1 rounded border border-border text-[10px] text-muted-foreground hover:text-foreground transition-colors"
                   title="경로 복사"
                 >
-                  📋
+                  <ClipboardCopy className="w-3.5 h-3.5" />
                 </button>
               </div>
               <div className="flex gap-3 text-muted-foreground mt-0.5">
@@ -256,7 +274,7 @@ export default function ExportDialog({ projectId, onClose }: Props) {
             disabled={loading}
             className="px-4 py-1.5 rounded bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
           >
-            {loading ? "내보내는 중…" : "Export"}
+            {loading ? "내보내는 중…" : `${format === "yolo" ? "YOLO" : "MOT"} 내보내기 시작`}
           </button>
         </div>
       </div>

@@ -2,11 +2,11 @@
 
 import shutil
 from datetime import datetime
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from backend.config import settings
 from backend.db.database import get_db
 from backend.schemas.common import PaginatedResponse
 from backend.schemas.project import ProjectCreate, ProjectRead, ProjectUpdate
@@ -55,11 +55,10 @@ def delete_project(project_id: int, db: Session = Depends(get_db)):
 
 @router.post("/projects/snapshot")
 def create_snapshot():
-    db_dir = Path.home() / ".mt_track"
-    db_path = db_dir / "mt_track.db"
+    db_path = settings.db_path
     if not db_path.exists():
         raise HTTPException(404, detail="Database file not found")
-    snap_dir = db_dir / "snapshots"
+    snap_dir = settings.snapshots_dir
     snap_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     snap_path = snap_dir / f"mt_track_{ts}.db"

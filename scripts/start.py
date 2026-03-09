@@ -1,9 +1,10 @@
-import signal
 import argparse
-import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
+
+from backend.config import settings
 
 
 def main():
@@ -13,18 +14,16 @@ def main():
     no_worker = bool(getattr(args, "no_worker", False))
 
     project_root = Path(__file__).resolve().parent.parent
-    port = int(os.environ.get("MT_PORT", "8000"))
 
-    # Start FastAPI server
     server_cmd = [
         sys.executable, "-m", "uvicorn",
         "backend.main:app",
-        "--host", "0.0.0.0",
-        "--port", str(port),
+        "--host", settings.host,
+        "--port", str(settings.port),
         "--reload",
     ]
 
-    print(f"Starting Moment Track on http://localhost:{port}")
+    print(f"Starting Moment Track on http://localhost:{settings.port}")
 
     server = None
     worker = None

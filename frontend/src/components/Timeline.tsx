@@ -11,6 +11,11 @@ interface TrackInfo {
   end_frame: number
 }
 
+interface TrackCoverage {
+  track_id: number
+  segments: [number, number][]
+}
+
 interface IdentityInfo {
   id: number
   label: string | null
@@ -36,17 +41,21 @@ interface Props {
   onChange: (frame: number) => void
   tracks?: TrackInfo[]
   identities?: IdentityInfo[]
+  trackCoverage?: TrackCoverage[]
 }
 
-export default function Timeline({
-  currentFrame,
-  totalFrames,
-  fps,
-  detections,
-  onChange,
-  tracks = [],
-  identities = [],
-}: Props) {
+export default function Timeline(props: Props) {
+  const {
+    currentFrame,
+    totalFrames,
+    fps,
+    detections,
+    onChange,
+    tracks = [],
+    identities = [],
+    trackCoverage = [],
+  } = props
+
   const barRef = useRef<HTMLDivElement>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
   const [zoomLevel, setZoomLevel] = useState(1)
@@ -180,6 +189,14 @@ export default function Timeline({
     return rows
   }, [getIdentityColor, identities, tracks])
 
+  const coverageMap = useMemo(() => {
+    const map = new Map<number, [number, number][]>()
+    for (const item of trackCoverage) {
+      map.set(item.track_id, item.segments)
+    }
+    return map
+  }, [trackCoverage])
+
   const timecode = totalFrames > 0 && fps > 0
     ? `${String(Math.floor(currentFrame / fps / 60)).padStart(2, "0")}:${String(Math.floor((currentFrame / fps) % 60)).padStart(2, "0")}`
     : "00:00"
@@ -233,6 +250,7 @@ export default function Timeline({
                       const start = frameToPercent(track.start_frame)
                       const end = frameToPercent(track.end_frame)
                       const width = Math.max(0.35, end - start)
+                      const segments = coverageMap.get(track.id)
                       return (
                         <div
                           key={track.id}
@@ -241,9 +259,28 @@ export default function Timeline({
                             left: `${start}%`,
                             width: `${width}%`,
                             backgroundColor: row.color,
+                            opacity: segments ? 0.25 : 1,
                           }}
                           title={`Track ${track.id}: ${track.start_frame} - ${track.end_frame}`}
-                        />
+                        >
+                          {segments?.map(([segStart, segEnd], i) => {
+                            const trackRange = track.end_frame - track.start_frame
+                            if (trackRange <= 0) return null
+                            const segLeft = ((segStart - track.start_frame) / trackRange) * 100
+                            const segWidth = Math.max(0.5, ((segEnd - segStart + 1) / trackRange) * 100)
+                            return (
+                              <div
+                                key={i}
+                                className="absolute top-0 h-full rounded-sm"
+                                style={{
+                                  left: `${segLeft}%`,
+                                  width: `${segWidth}%`,
+                                  backgroundColor: row.color,
+                                }}
+                              />
+                            )
+                          })}
+                        </div>
                       )
                     })}
                   </div>

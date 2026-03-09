@@ -3,6 +3,7 @@
  */
 import { useState, useEffect, useCallback, useRef } from "react"
 import { api } from "@/api/client"
+import { useProjectStore } from "@/stores/projectStore"
 
 interface JobRead {
   id: number
@@ -32,6 +33,7 @@ const STATUS_COLOR: Record<string, string> = {
 }
 
 export default function InferencePanel({ projectId, videoId, onClose }: Props) {
+  const { classes: projectClasses } = useProjectStore()
   const [tab, setTab] = useState<Tab>("detect")
   const [jobs, setJobs] = useState<JobRead[]>([])
   const [loading, setLoading] = useState(false)
@@ -43,6 +45,7 @@ export default function InferencePanel({ projectId, videoId, onClose }: Props) {
 
   // detect params
   const [modelPath, setModelPath] = useState("")
+  const [selectedClasses, setSelectedClasses] = useState<string[]>([])
   const [confThreshold, setConfThreshold] = useState(0.5)
   const [iouThreshold, setIouThreshold] = useState(0.45)
   const [frameStart, setFrameStart] = useState(0)
@@ -56,6 +59,12 @@ export default function InferencePanel({ projectId, videoId, onClose }: Props) {
   // embed params
   const [embedModelPath, setEmbedModelPath] = useState("")
   const [batchSize, setBatchSize] = useState(64)
+
+  useEffect(() => {
+    if (projectClasses.length > 0 && selectedClasses.length === 0) {
+      setSelectedClasses(projectClasses)
+    }
+  }, [projectClasses, selectedClasses.length])
 
   const loadJobs = useCallback(async () => {
     setLoading(true)
@@ -98,6 +107,7 @@ export default function InferencePanel({ projectId, videoId, onClose }: Props) {
         body = {
           video_id: videoId,
           model_path: modelPath,
+          classes: selectedClasses.length > 0 ? selectedClasses : null,
           frame_start: frameStart,
           frame_end: frameEnd !== "" ? Number(frameEnd) : null,
           conf_threshold: confThreshold,
@@ -138,16 +148,50 @@ export default function InferencePanel({ projectId, videoId, onClose }: Props) {
     } catch {}
   }
 
+  const toggleClass = (className: string) => {
+    setSelectedClasses((prev) =>
+      prev.includes(className) ? prev.filter((item) => item !== className) : [...prev, className],
+    )
+  }
+
+  const stepTitle =
+    tab === "detect" ? "Detection 실행" :
+    tab === "track" ? "Tracking 실행" :
+    "ReID 임베딩 실행"
+
+  const stepDescription =
+    tab === "detect"
+      ? "선택한 클래스에 대해 검출을 생성합니다."
+      : tab === "track"
+        ? "기존 detection을 track으로 연결합니다."
+        : "선택된 detection에 임베딩을 생성합니다."
+
+  const submitLabel =
+    tab === "detect" ? "Detection 실행" :
+    tab === "track" ? "Tracking 실행" :
+    "Embedding 실행"
+
+  const canSubmit =
+    !submitting &&
+    (
+      (tab === "detect" && modelPath.trim().length > 0) ||
+      tab === "track" ||
+      (tab === "embed" && embedModelPath.trim().length > 0)
+    )
+
   return (
     /* slide-in panel — fixed right side */
     <div className="fixed inset-y-0 right-0 z-40 flex">
       {/* backdrop */}
       <div className="absolute inset-0 -left-full bg-black/40" onClick={onClose} />
 
-      <div className="relative w-80 flex flex-col bg-card border-l border-border shadow-2xl text-sm">
+      <div className="relative w-80 flex flex-col overflow-x-hidden bg-card border-l border-border shadow-2xl text-sm">
         {/* header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
-          <h2 className="font-semibold text-sm">AI Inference</h2>
+          <div>
+            <h2 className="font-semibold text-sm">AI 자동 레이블링</h2>
+            <p className="text-[10px] text-muted-foreground mt-0.5">{stepDescription}</p>
+          </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground">✕</button>
         </div>
 
@@ -210,6 +254,28 @@ export default function InferencePanel({ projectId, videoId, onClose }: Props) {
                   className="bg-background border border-border rounded px-2 py-1 text-xs outline-none focus:border-primary"
                 />
               </div>
+              {projectClasses.length > 0 && (
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] text-muted-foreground uppercase tracking-wider">
+                    Classes <span className="normal-case text-[10px]">(미선택 시 전체)</span>
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {projectClasses.map((className) => (
+                      <label key={className} className="flex items-center gap-1.5 text-xs cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={selectedClasses.includes(className)}
+                          onChange={() => toggleClass(className)}
+                          className="accent-primary"
+                        />
+                        <span className={selectedClasses.includes(className) ? "text-foreground" : "text-muted-foreground"}>
+                          {className}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="flex gap-2">
                 <div className="flex-1 flex flex-col gap-1">
                   <label className="text-[10px] text-muted-foreground uppercase tracking-wider">Conf</label>
@@ -272,8 +338,9 @@ export default function InferencePanel({ projectId, videoId, onClose }: Props) {
           )}
 
           <div className="text-[10px] text-muted-foreground bg-accent/30 rounded px-2 py-1.5 leading-relaxed">
-            Workers가 없으면 잡은 <span className="text-yellow-400">pending</span> 상태로 저장됩니다.
-            별도 GPU worker 프로세스를 실행하면 자동으로 처리됩니다.
+            <span className="font-medium text-foreground">{stepTitle}</span>
+            {" "}버튼을 누르면 현재 비디오 기준으로 작업이 생성됩니다.
+            Worker가 없으면 잡은 <span className="text-yellow-400">pending</span> 상태로 저장됩니다.
           </div>
 
           {error && (
@@ -284,10 +351,10 @@ export default function InferencePanel({ projectId, videoId, onClose }: Props) {
 
           <button
             onClick={handleSubmit}
-            disabled={submitting}
+            disabled={!canSubmit}
             className="w-full py-2 rounded bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
           >
-            {submitting ? "제출 중…" : "Submit Job"}
+            {submitting ? "제출 중…" : submitLabel}
           </button>
         </div>
 

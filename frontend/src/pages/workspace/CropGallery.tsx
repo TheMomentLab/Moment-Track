@@ -6,7 +6,7 @@
  */
 import { useState, useEffect, useCallback, useMemo } from "react"
 import { useNavigate, useParams } from "react-router-dom"
-import { api } from "@/api/client"
+import { api, getAllPaginated } from "@/api/client"
 import { toast } from "sonner"
 import CropGrid from "@/components/CropGrid"
 import Logo from "@/components/Logo"
@@ -66,6 +66,7 @@ export default function CropGallery() {
   const [mergeMode, setMergeMode] = useState(false)
   const [mergeSelected, setMergeSelected] = useState<Set<number>>(new Set())
   const [mergeConfirmOpen, setMergeConfirmOpen] = useState(false)
+  const [firstVideoId, setFirstVideoId] = useState<number | null>(null)
 
   useEffect(() => {
     localStorage.setItem("mt_cropGallery_keyframesOnly", String(keyframesOnly))
@@ -80,9 +81,9 @@ export default function CropGallery() {
   const loadIdentities = useCallback(async () => {
     setLoadingIdentities(true)
     try {
-      const r = await api.get<{ items: Identity[] }>(`/projects/${pid}/identities?limit=200`)
-      setIdentities(r.items)
-      if (r.items.length > 0) setSelectedIdentityId(r.items[0].id)
+      const items = await getAllPaginated<Identity>(`/projects/${pid}/identities`)
+      setIdentities(items)
+      if (items.length > 0) setSelectedIdentityId(items[0].id)
       else setSelectedIdentityId(null)
     } catch {
     } finally {
@@ -94,15 +95,21 @@ export default function CropGallery() {
     loadIdentities()
   }, [loadIdentities])
 
+  useEffect(() => {
+    api.get<{ items: { id: number }[] }>(`/projects/${pid}/videos?limit=1`)
+      .then((r) => { if (r.items.length > 0) setFirstVideoId(r.items[0].id) })
+      .catch(() => {})
+  }, [pid])
+
   // load crops for selected identity
   const loadCrops = useCallback(() => {
     if (selectedIdentityId === null) { setCrops([]); return }
     setLoadingCrops(true)
-    api
-      .get<{ items: CropItem[] }>(
-        `/identities/${selectedIdentityId}/crops?stride=${stride}&keyframes_only=${keyframesOnly}&limit=500`,
-      )
-      .then((r) => setCrops(r.items))
+    getAllPaginated<CropItem>(
+      `/identities/${selectedIdentityId}/crops?stride=${stride}&keyframes_only=${keyframesOnly}`,
+      500,
+    )
+      .then((items) => setCrops(items))
       .catch(() => setCrops([]))
       .finally(() => setLoadingCrops(false))
   }, [selectedIdentityId, stride, keyframesOnly])
@@ -209,9 +216,25 @@ export default function CropGallery() {
           >
             <Logo className="w-5 h-5" />
           </button>
-          <span className="font-semibold">Crop Gallery</span>
+          <button
+            onClick={() => navigate("/")}
+            className="text-muted-foreground hover:text-foreground transition-colors text-xs"
+          >
+            ← Projects
+          </button>
           <span className="text-muted-foreground">/</span>
-          <span className="text-muted-foreground text-xs">Project #{pid}</span>
+          <span className="font-semibold">Crop Gallery</span>
+          {firstVideoId !== null && (
+            <>
+              <span className="text-muted-foreground">·</span>
+              <button
+                onClick={() => navigate(`/projects/${pid}/videos/${firstVideoId}`)}
+                className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                Annotator →
+              </button>
+            </>
+          )}
         </div>
 
         {/* Filter controls */}

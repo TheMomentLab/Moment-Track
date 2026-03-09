@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom"
 import { api } from "@/api/client"
 import { toast } from "sonner"
 import Logo from "@/components/Logo"
+import { LayoutGrid } from "lucide-react"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -251,10 +252,10 @@ export default function ProjectList() {
                   {new Date(project.created_at).toLocaleDateString()}
                 </p>
                 <p className="text-xs text-muted-foreground">비디오 {project.video_count ?? 0}개</p>
-                {(project.total_frames ?? 0) > 0 && (() => {
-                  const total = project.total_frames!
+                {(() => {
+                  const total = project.total_frames ?? 0
                   const done = project.annotated_frames ?? 0
-                  const pct = Math.min(100, Math.round((done / total) * 100))
+                  const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0
                   return (
                     <div className="flex flex-col gap-0.5">
                       <div className="w-full h-1.5 rounded-full bg-accent overflow-hidden">
@@ -264,7 +265,7 @@ export default function ProjectList() {
                         />
                       </div>
                       <span className="text-[10px] text-muted-foreground tabular-nums">
-                        {done.toLocaleString()} / {total.toLocaleString()} frames ({pct}%)
+                        {total > 0 ? `${done.toLocaleString()} / ${total.toLocaleString()} frames (${pct}%)` : "No frames"}
                       </span>
                     </div>
                   )
@@ -289,7 +290,7 @@ export default function ProjectList() {
                   onClick={(e) => { e.stopPropagation(); navigate("/projects/" + project.id + "/gallery") }}
                   className="mt-1 text-[10px] text-muted-foreground hover:text-primary transition-colors text-left"
                 >
-                  🖼 Crop Gallery →
+                  <LayoutGrid className="inline w-3 h-3 -mt-px" /> Crop Gallery →
                 </button>
               </div>
             ))}
@@ -301,7 +302,7 @@ export default function ProjectList() {
         <div
           data-project-context-menu="true"
           className="fixed z-50 min-w-32 rounded-md border border-border bg-popover p-1 shadow-md"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
+          style={{ left: Math.min(contextMenu.x, window.innerWidth - 200), top: Math.min(contextMenu.y, window.innerHeight - 120) }}
         >
           <button
             onClick={(e) => {

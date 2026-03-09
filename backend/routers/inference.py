@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from backend.config import settings
 from backend.db.database import get_db
 from backend.schemas.inference import (
     DetectRequest,
@@ -105,6 +106,6 @@ def stream_job_progress(job_id: int, db: Session = Depends(get_db)):
             yield f"data: {json.dumps(payload)}\n\n"
             if job.status in ("done", "failed", "cancelled"):
                 break
-            time.sleep(1)
+            time.sleep(settings.sse_poll_interval)
 
     return StreamingResponse(generate(), media_type="text/event-stream")

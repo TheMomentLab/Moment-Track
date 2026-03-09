@@ -17,6 +17,12 @@ from worker.ipc import JobReporter
 
 log = logging.getLogger(__name__)
 
+DEFAULT_TRACK_THRESH = 0.5
+DEFAULT_MATCH_THRESH = 0.8
+DEFAULT_TRACK_BUFFER = 30
+DEFAULT_FRAME_RATE = 30
+BYTETRACK_IOU_MIN = 0.1
+
 def _as_int(value: object, default: int) -> int:
     if value is None:
         return default
@@ -109,6 +115,7 @@ def _track_with_bytetrack(
     track_thresh: float,
     match_thresh: float,
     track_buffer: int,
+    frame_rate: int,
 ) -> dict[int, int] | None:
     try:
         BYTETracker = import_module("ultralytics.trackers.byte_tracker").BYTETracker
@@ -123,7 +130,7 @@ def _track_with_bytetrack(
     )
 
     try:
-        tracker = BYTETracker(args=args, frame_rate=30)
+        tracker = BYTETracker(args=args, frame_rate=frame_rate)
     except Exception:
         log.exception("Failed to initialize BYTETracker; falling back to IoU tracker")
         return None
@@ -180,7 +187,7 @@ def _track_with_bytetrack(
                     best_iou = iou_value
                     best_det_id = det_id
 
-            if best_det_id is not None and best_iou > 0.1:
+            if best_det_id is not None and best_iou > BYTETRACK_IOU_MIN:
                 detection_to_track[best_det_id] = int(track_id)
                 available_det_ids.remove(best_det_id)
 
@@ -196,12 +203,20 @@ def run_track(job_id: int, params: Mapping[str, object], reporter: JobReporter) 
 
     frame_start = _as_int(params.get("frame_start"), 0)
     frame_end = params.get("frame_end")
-    track_thresh = _as_float(params.get("track_thresh"), 0.5)
-    match_thresh = _as_float(params.get("match_thresh"), 0.8)
-    track_buffer = _as_int(params.get("track_buffer"), 30)
+    track_thresh = _as_float(params.get("track_thresh"), DEFAULT_TRACK_THRESH)
+    match_thresh = _as_float(params.get("match_thresh"), DEFAULT_MATCH_THRESH)
+    track_buffer = _as_int(params.get("track_buffer"), DEFAULT_TRACK_BUFFER)
 
     db = ipc.get_worker_db_session()
     try:
+        video = db.query(Video).filter(Video.id == video_id).first()
+        if video is None:
+            raise ValueError(f"Video {video_id} not found")
+
+        frame_rate = DEFAULT_FRAME_RATE
+        if video.fps > 0:
+            frame_rate = max(1, int(round(video.fps)))
+
         detections_query = db.query(Detection).filter(Detection.video_id == video_id)
         detections_query = detections_query.filter(Detection.frame_idx >= frame_start)
         if frame_end is not None:
@@ -217,7 +232,13 @@ def run_track(job_id: int, params: Mapping[str, object], reporter: JobReporter) 
         for det in detections:
             frames.setdefault(det.frame_idx, []).append(det)
 
-        byte_tracks = _track_with_bytetrack(frames, track_thresh, match_thresh, track_buffer)
+        byte_tracks = _track_with_bytetrack(
+            frames,
+            track_thresh,
+            match_thresh,
+            track_buffer,
+            frame_rate,
+        )
         if byte_tracks is None:
             detection_to_track = _track_with_iou(frames, match_thresh, track_buffer)
         else:
@@ -230,10 +251,6 @@ def run_track(job_id: int, params: Mapping[str, object], reporter: JobReporter) 
             if reporter.is_cancelled:
                 log.info("Tracking job %s cancelled", job_id)
                 return
-
-        video = db.query(Video).filter(Video.id == video_id).first()
-        if video is None:
-            raise ValueError(f"Video {video_id} not found")
 
         grouped_by_temp_track: dict[int, list[Detection]] = {}
         for det in detections:
